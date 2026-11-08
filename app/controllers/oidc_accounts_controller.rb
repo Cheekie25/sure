@@ -1,13 +1,12 @@
 class OidcAccountsController < ApplicationController
   skip_authentication only: [ :link, :create_link, :new_user, :create_user ]
+  before_action :set_pending_auth, only: [ :link, :create_link, :new_user, :create_user ]
   before_action :reject_removed_identity, only: [ :link, :create_link, :new_user, :create_user ]
   rescue_from SsoIdentityBlock::BlockedIdentity, with: :reject_removed_identity_after_lock
   layout "auth"
 
   def link
     # Check if there's pending OIDC auth in session
-    @pending_auth = session[:pending_oidc_auth]
-
     if @pending_auth.nil?
       redirect_to new_session_path, alert: t(".no_pending_oidc")
       return
@@ -25,8 +24,6 @@ class OidcAccountsController < ApplicationController
   end
 
   def create_link
-    @pending_auth = session[:pending_oidc_auth]
-
     if @pending_auth.nil?
       redirect_to new_session_path, alert: t(".no_pending_oidc")
       return
@@ -85,8 +82,6 @@ class OidcAccountsController < ApplicationController
 
   def new_user
     # Check if there's pending OIDC auth in session
-    @pending_auth = session[:pending_oidc_auth]
-
     if @pending_auth.nil?
       redirect_to new_session_path, alert: t(".no_pending_oidc")
       return
@@ -101,8 +96,6 @@ class OidcAccountsController < ApplicationController
   end
 
   def create_user
-    @pending_auth = session[:pending_oidc_auth]
-
     if @pending_auth.nil?
       redirect_to new_session_path, alert: t(".no_pending_oidc")
       return
@@ -218,8 +211,13 @@ class OidcAccountsController < ApplicationController
       redirect_to new_session_path, alert: t("sessions.openid_connect.failed")
     end
 
+    def set_pending_auth
+      # Cache-backed sessions preserve symbol keys from the OAuth callback.
+      @pending_auth = session[:pending_oidc_auth]&.with_indifferent_access
+    end
+
     def reject_removed_identity
-      pending_auth = session[:pending_oidc_auth]
+      pending_auth = @pending_auth
       return unless pending_auth.present?
       return unless SsoIdentityBlock.blocked?(provider: pending_auth["provider"], uid: pending_auth["uid"])
 
