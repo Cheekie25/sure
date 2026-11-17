@@ -15,6 +15,7 @@ class CoinstatsItem::SyncerTest < ActiveSupport::TestCase
     mock_sync = mock("sync")
     mock_sync.stubs(:respond_to?).with(:status_text).returns(true)
     mock_sync.stubs(:respond_to?).with(:sync_stats).returns(true)
+    mock_sync.stubs(:sync_stats).returns({})
     mock_sync.stubs(:window_start_date).returns(nil)
     mock_sync.stubs(:window_end_date).returns(nil)
     mock_sync.expects(:update!).at_least_once
@@ -34,6 +35,7 @@ class CoinstatsItem::SyncerTest < ActiveSupport::TestCase
     mock_sync = mock("sync")
     mock_sync.stubs(:respond_to?).with(:status_text).returns(true)
     mock_sync.stubs(:respond_to?).with(:sync_stats).returns(true)
+    mock_sync.stubs(:sync_stats).returns({})
     mock_sync.stubs(:window_start_date).returns(nil)
     mock_sync.stubs(:window_end_date).returns(nil)
     mock_sync.expects(:update!).at_least_once
@@ -117,6 +119,7 @@ class CoinstatsItem::SyncerTest < ActiveSupport::TestCase
     mock_sync = mock("sync")
     mock_sync.stubs(:respond_to?).with(:status_text).returns(true)
     mock_sync.stubs(:respond_to?).with(:sync_stats).returns(true)
+    mock_sync.stubs(:sync_stats).returns({})
     mock_sync.stubs(:window_start_date).returns(nil)
     mock_sync.stubs(:window_end_date).returns(nil)
     mock_sync.expects(:update!).at_least_once
@@ -176,5 +179,24 @@ class CoinstatsItem::SyncerTest < ActiveSupport::TestCase
     assert_nothing_raised do
       @syncer.perform_post_sync
     end
+  end
+
+  test "perform_sync keeps data quality stats collected earlier in the sync" do
+    crypto = Crypto.create!
+    account = @family.accounts.create!(accountable: crypto, name: "Test Crypto", balance: 1000, currency: "USD")
+    linked_account = @coinstats_item.coinstats_accounts.create!(name: "Linked Wallet", currency: "USD")
+    AccountProvider.create!(account: account, provider: linked_account)
+
+    sync = Sync.create!(syncable: @coinstats_item)
+    @coinstats_item.expects(:import_latest_coinstats_data).once
+    @coinstats_item.expects(:process_accounts).once
+    @coinstats_item.expects(:schedule_account_syncs).once
+
+    @syncer.perform_sync(sync)
+
+    stats = sync.reload.sync_stats
+    assert_equal 1, stats["total_accounts"]
+    assert_equal 1, stats["data_warnings"]
+    assert stats["data_quality_details"].present?
   end
 end

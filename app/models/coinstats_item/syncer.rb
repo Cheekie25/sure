@@ -56,7 +56,8 @@ class CoinstatsItem::Syncer
     end
 
     if sync.respond_to?(:sync_stats)
-      sync.update!(sync_stats: sync_stats)
+      # Merge so stats collected earlier in this sync (data quality warnings) are kept.
+      sync.update!(sync_stats: (sync.sync_stats || {}).merge(sync_stats))
     end
   end
 
