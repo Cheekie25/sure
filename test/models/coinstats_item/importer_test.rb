@@ -1091,4 +1091,30 @@ class CoinstatsItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 70_272.0, defi_account.reload.current_balance.to_f
     refute result[:success]
   end
+
+  test "skips wallets whose accounts are all disabled" do
+    active_local = @family.accounts.create!(accountable: Crypto.create!, name: "Active", balance: 0, currency: "USD")
+    active = @coinstats_item.coinstats_accounts.create!(
+      name: "Ethereum", currency: "USD", account_id: "ethereum",
+      raw_payload: { address: "0xactive", blockchain: "ethereum" }
+    )
+    AccountProvider.create!(account: active_local, provider: active)
+
+    disabled_local = @family.accounts.create!(accountable: Crypto.create!, name: "Disabled", balance: 0, currency: "USD")
+    disabled = @coinstats_item.coinstats_accounts.create!(
+      name: "Chainlink", currency: "USD", account_id: "chainlink",
+      raw_payload: { address: "0xdisabled", blockchain: "ethereum" }
+    )
+    AccountProvider.create!(account: disabled_local, provider: disabled)
+    disabled_local.disable!
+
+    @mock_provider.expects(:get_wallet_defi).with(address: "0xactive", connection_id: "ethereum").returns(success_response({ protocols: [] }))
+    @mock_provider.expects(:get_wallet_defi).with(address: "0xdisabled", connection_id: "ethereum").never
+    @mock_provider.expects(:get_wallet_balances).with("ethereum:0xactive").returns(success_response([]))
+    @mock_provider.expects(:get_wallet_transactions).with("ethereum:0xactive").returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_balance).returns([])
+    @mock_provider.stubs(:extract_wallet_transactions).returns([])
+
+    CoinstatsItem::Importer.new(@coinstats_item, coinstats_provider: @mock_provider).import
+  end
 end

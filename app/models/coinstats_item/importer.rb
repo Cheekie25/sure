@@ -28,8 +28,11 @@ class CoinstatsItem::Importer
     sync_exchange_accounts!
 
     # Get all linked coinstats accounts (ones with account_provider associations)
+    # Disabled (or pending deletion) accounts are skipped: they are hidden from the
+    # balance sheet, so fetching them only burns CoinStats credits.
     linked_accounts = coinstats_item.coinstats_accounts
                                     .joins(:account_provider)
+                                    .joins(:account).merge(Account.visible)
                                     .includes(:account)
                                     .order(:created_at, :id)
 
@@ -686,7 +689,9 @@ class CoinstatsItem::Importer
     def sync_defi_for_wallets!(wallet_accounts)
       # Include existing DeFi accounts as address sources so staking positions stay
       # current even if the parent wallet account has been removed.
-      defi_accounts = coinstats_item.coinstats_accounts.joins(:account_provider).select(&:defi_source?)
+      defi_accounts = coinstats_item.coinstats_accounts.joins(:account_provider)
+                                    .joins(:account).merge(Account.visible)
+                                    .select(&:defi_source?)
 
       unique_wallets = (wallet_accounts + defi_accounts).uniq(&:id).filter_map do |account|
         raw = account.raw_payload.to_h.with_indifferent_access
