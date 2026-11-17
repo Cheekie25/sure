@@ -23,8 +23,14 @@ class CoinstatsItem::DefiAccountManager
       return false
     end
 
-    defi_data = response.data.to_h.with_indifferent_access
-    protocols = Array(defi_data[:protocols])
+    # A payload without a `protocols` array is invalid, not an empty wallet:
+    # treating it as empty would zero out every existing DeFi position.
+    defi_data = response.data.respond_to?(:to_h) ? response.data.to_h.with_indifferent_access : {}
+    unless defi_data[:protocols].is_a?(Array)
+      Rails.logger.warn "CoinstatsItem::DefiAccountManager - Invalid DeFi response (no protocols array) for #{normalized_blockchain}:#{normalized_address}; keeping existing positions"
+      return false
+    end
+    protocols = defi_data[:protocols]
     active_defi_ids = []
     had_upsert_failures = false
 
