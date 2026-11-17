@@ -1061,4 +1061,33 @@ class CoinstatsItem::ImporterTest < ActiveSupport::TestCase
     refute result[:success]
     assert_equal 1, result[:accounts_failed]
   end
+
+  test "invalid DeFi response keeps existing DeFi positions" do
+    crypto = Crypto.create!
+    account = @family.accounts.create!(accountable: crypto, name: "Ethereum Wallet", balance: 0, currency: "USD")
+    wallet = @coinstats_item.coinstats_accounts.create!(
+      name: "Ethereum", currency: "USD", account_id: "ethereum",
+      raw_payload: { address: "0x123abc", blockchain: "ethereum" }
+    )
+    AccountProvider.create!(account: account, provider: wallet)
+
+    defi_local = @family.accounts.create!(accountable: Crypto.create!, name: "ETH (Lido Staking)", balance: 70_272, currency: "USD")
+    defi_account = @coinstats_item.coinstats_accounts.create!(
+      name: "ETH (Lido Staking)", currency: "USD", account_id: "defi:ethereum:lido:staking:ethereum:deposit",
+      wallet_address: "0x123abc", current_balance: 70_272,
+      raw_payload: { source: "defi", address: "0x123abc", blockchain: "ethereum", amount: 32, balance: 70_272 }
+    )
+    AccountProvider.create!(account: defi_local, provider: defi_account)
+
+    @mock_provider.stubs(:get_wallet_defi).returns(success_response({}))
+    @mock_provider.stubs(:get_wallet_balances).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_balance).returns([])
+    @mock_provider.stubs(:get_wallet_transactions).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_transactions).returns([])
+
+    result = CoinstatsItem::Importer.new(@coinstats_item, coinstats_provider: @mock_provider).import
+
+    assert_equal 70_272.0, defi_account.reload.current_balance.to_f
+    refute result[:success]
+  end
 end
