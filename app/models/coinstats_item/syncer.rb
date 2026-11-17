@@ -15,7 +15,7 @@ class CoinstatsItem::Syncer
   def perform_sync(sync)
     # Phase 1: Import data from CoinStats API
     sync.update!(status_text: I18n.t("models.coinstats_item.syncer.importing_wallets")) if sync.respond_to?(:status_text)
-    coinstats_item.import_latest_coinstats_data
+    import_result = coinstats_item.import_latest_coinstats_data
 
     # Phase 2: Check account setup status and collect sync statistics
     sync.update!(status_text: I18n.t("models.coinstats_item.syncer.checking_configuration")) if sync.respond_to?(:status_text)
@@ -28,7 +28,7 @@ class CoinstatsItem::Syncer
       total_accounts: total_accounts,
       linked_accounts: linked_accounts.count,
       unlinked_accounts: unlinked_accounts.count
-    }
+    }.merge(import_health_stats(import_result))
 
     if unlinked_accounts.any?
       coinstats_item.update!(pending_account_setup: true)
@@ -67,6 +67,30 @@ class CoinstatsItem::Syncer
   end
 
   private
+
+    # Translates the importer result into health stats so a sync that could not
+    # refresh wallet balances or DeFi positions is not shown as fully successful.
+    # The sync itself still completes: existing balances were preserved.
+    def import_health_stats(import_result)
+      return {} unless import_result.is_a?(Hash)
+
+      errors = []
+      if import_result[:wallet_fetch_failed]
+        errors << { "message" => I18n.t("provider_warnings.coinstats_wallet_refresh_failed"), "category" => "coinstats_wallet_sync" }
+      end
+
+      Array(import_result[:defi_failed_wallets]).each do |wallet|
+        errors << { "message" => I18n.t("provider_warnings.coinstats_defi_refresh_failed", wallet: wallet), "category" => "defi_sync" }
+      end
+
+      if errors.any?
+        Rails.logger.warn("CoinstatsItem::Syncer - item #{coinstats_item.id} completed with #{errors.size} error(s): #{errors.map { |e| e["category"] }.tally}")
+      end
+
+      stats = { "import_started" => true, "total_errors" => errors.size }
+      stats["errors"] = errors if errors.any?
+      stats
+    end
 
     # Collects a data quality warning for all CoinStats accounts.
     # CoinStats cannot provide activity labels (Buy, Sell, Dividend, etc.) for transactions,

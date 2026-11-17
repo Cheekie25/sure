@@ -59,7 +59,9 @@ class CoinstatsItem::Importer
         success: false,
         accounts_updated: 0,
         accounts_failed: accounts_failed,
-        transactions_imported: 0
+        transactions_imported: 0,
+        wallet_fetch_failed: true,
+        defi_failed_wallets: masked_wallet_keys(failed_defi_wallet_keys)
       }
     end
 
@@ -102,7 +104,8 @@ class CoinstatsItem::Importer
       success: accounts_failed == 0,
       accounts_updated: accounts_updated,
       accounts_failed: accounts_failed,
-      transactions_imported: transactions_imported
+      transactions_imported: transactions_imported,
+      defi_failed_wallets: masked_wallet_keys(failed_defi_wallet_keys)
     }
   end
 
@@ -700,7 +703,17 @@ class CoinstatsItem::Importer
 
       unique_wallets.each do |wallet|
         result = manager.sync_wallet!(address: wallet[:address], blockchain: wallet[:blockchain], provider: coinstats_provider)
-        failed_wallet_keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase unless result
+        next if result
+
+        failed_wallet_keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
+        log_debug_event(
+          level: "warn",
+          message: "CoinStats DeFi positions not refreshed; existing positions preserved",
+          metadata: {
+            coinstats_item_id: coinstats_item.id,
+            wallet: masked_wallet_keys([ "#{wallet[:blockchain]}:#{wallet[:address]}" ]).first
+          }
+        )
       end
 
       failed_wallet_keys
@@ -711,6 +724,16 @@ class CoinstatsItem::Importer
       Array(unique_wallets).each_with_object(failed_wallet_keys || Set.new) do |wallet, keys|
         keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
       end
+    end
+
+    # "ethereum:0x1234...abcd" - wallet keys are reported to the UI and logs
+    # without the full address.
+    def masked_wallet_keys(keys)
+      Array(keys).map do |key|
+        blockchain, address = key.to_s.split(":", 2)
+        address = "#{address[0, 6]}...#{address[-4, 4]}" if address.to_s.length > 10
+        "#{blockchain}:#{address}"
+      end.sort
     end
 
     def defi_supported_blockchain?(blockchain)
