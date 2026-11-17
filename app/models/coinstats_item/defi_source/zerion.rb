@@ -48,9 +48,14 @@ class CoinstatsItem::DefiSource::Zerion
 
   DEFAULT_CACHE_TTL = 10.minutes
 
-  def initialize(provider, cache_ttl: nil)
+  # Positions worth less than this (after merging duplicates) are treated as dust
+  # and not imported. Real wallets often hold dozens of near-zero protocol legs.
+  DEFAULT_MIN_VALUE_USD = "1"
+
+  def initialize(provider, cache_ttl: nil, min_value_usd: nil)
     @provider = provider
     @cache_ttl = cache_ttl || ENV.fetch("ZERION_DEFI_CACHE_TTL_SECONDS", DEFAULT_CACHE_TTL.to_i).to_i.seconds
+    @min_value_usd = BigDecimal((min_value_usd || ENV.fetch("ZERION_DEFI_MIN_VALUE_USD", DEFAULT_MIN_VALUE_USD)).to_s)
     @responses = {}
   end
 
@@ -81,6 +86,13 @@ class CoinstatsItem::DefiSource::Zerion
       end
 
       build_position(item, normalized_blockchain, chain_id)
+    end
+
+    positions = merge_duplicates(positions).reject do |position|
+      next false if position.value_usd >= @min_value_usd
+
+      skipped["dust"] += 1
+      true
     end
 
     CoinstatsItem::DefiSource::Result.ok(positions, skipped: skipped.to_h)
@@ -140,7 +152,7 @@ class CoinstatsItem::DefiSource::Zerion
 
       CoinstatsItem::DefiPosition.new(
         provider: KEY,
-        account_id: "defi:zerion:#{blockchain}:#{item[:id].to_s.downcase}",
+        account_id: "defi:zerion:#{blockchain}:#{item[:id].to_s.downcase.gsub(/\s+/, "_")}",
         blockchain: blockchain,
         provider_chain_id: chain_id,
         protocol_id: dapp_id || protocol_name.to_s.parameterize.presence,
@@ -158,6 +170,23 @@ class CoinstatsItem::DefiSource::Zerion
         value_usd: value,
         external_id: item[:id].to_s
       )
+    end
+
+    # Zerion can return several legs sharing the same position id (e.g. two
+    # deposits of the same token in identically named pools). They are distinct
+    # holdings, so sum them instead of keeping only one.
+    def merge_duplicates(positions)
+      positions.group_by(&:account_id).map do |_account_id, group|
+        next group.first if group.one?
+
+        quantity = group.sum(&:quantity)
+        value = group.sum(&:value_usd)
+        group.first.with(
+          quantity: quantity,
+          value_usd: value,
+          unit_price_usd: group.first.unit_price_usd || (quantity.positive? ? value / quantity : nil)
+        )
+      end
     end
 
     def quantity_for(attributes)

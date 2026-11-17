@@ -43,6 +43,10 @@ Safety rules enforced by the code:
   Failures are also recorded in `/settings/debug` (`provider_sync_error`).
 - Zerion `loan` legs, spam (`is_trash`) and non-displayable share tokens are
   not imported; skipped loans are listed in the sync summary.
+- Zerion positions worth less than `ZERION_DEFI_MIN_VALUE_USD` (default `1`)
+  are treated as dust and not imported; an existing position that falls below
+  the threshold is zeroed like a vanished one. Legs that share the same Zerion
+  position id are summed into one account.
 
 ## Configuration
 

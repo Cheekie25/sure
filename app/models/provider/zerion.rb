@@ -93,7 +93,7 @@ class Provider::Zerion < Provider
         "filter[positions]" => positions,
         "filter[trash]" => "only_non_trash",
         "currency" => currency,
-        "sort" => "-value"
+        "sort" => "value" # documented default: highest value first
       }
       query["filter[chain_ids]"] = Array(chain_ids).join(",") if chain_ids.present?
 
