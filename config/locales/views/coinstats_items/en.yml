@@ -68,6 +68,7 @@ en:
       reconnect: Reconnect
       status: Last synced %{timestamp} ago
       status_never: Never synced
+      partial_sync_warning: Last sync completed with errors - some balances or DeFi positions were not refreshed (see sync summary)
       status_with_summary: "Last synced %{timestamp} ago • %{summary}"
       update_api_key: Update API Key
       delete: Delete

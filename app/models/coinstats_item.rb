@@ -139,6 +139,15 @@ class CoinstatsItem < ApplicationRecord
     institution_name.presence || name.presence || "CoinStats"
   end
 
+  # True when the most recent sync completed but could not refresh everything
+  # (e.g. CoinStats credits exhausted, DeFi fetch failed). Existing balances
+  # were preserved, so the UI must not present the sync as fully successful.
+  # @return [Boolean]
+  def latest_sync_incomplete?
+    stats = syncs.ordered.first&.sync_stats
+    stats.is_a?(Hash) && stats["total_errors"].to_i.positive?
+  end
+
   # @return [Boolean] true if API key is set
   def credentials_configured?
     api_key.present?

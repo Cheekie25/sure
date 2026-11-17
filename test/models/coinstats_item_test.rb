@@ -228,4 +228,15 @@ class CoinstatsItemTest < ActiveSupport::TestCase
 
     assert_equal "1 crypto wallets synced, 1 need setup", @coinstats_item.sync_status_summary
   end
+
+  test "latest_sync_incomplete? reflects errors of the most recent sync" do
+    item = CoinstatsItem.create!(family: families(:dylan_family), name: "CoinStats", api_key: "key")
+    refute item.latest_sync_incomplete?
+
+    item.syncs.create!(sync_stats: { "total_errors" => 1 }, created_at: 2.hours.ago)
+    assert item.latest_sync_incomplete?
+
+    item.syncs.create!(sync_stats: { "total_errors" => 0 })
+    refute item.reload.latest_sync_incomplete?
+  end
 end
