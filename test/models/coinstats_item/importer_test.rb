@@ -1040,4 +1040,25 @@ class CoinstatsItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 1, result[:accounts_failed]
     refute result[:success]
   end
+
+  test "unexpected DeFi crash is reported as a failure, not a success" do
+    crypto = Crypto.create!
+    account = @family.accounts.create!(accountable: crypto, name: "Ethereum Wallet", balance: 0, currency: "USD")
+    coinstats_account = @coinstats_item.coinstats_accounts.create!(
+      name: "Ethereum", currency: "USD", account_id: "ethereum",
+      raw_payload: { address: "0x123abc", blockchain: "ethereum" }
+    )
+    AccountProvider.create!(account: account, provider: coinstats_account)
+
+    CoinstatsItem::DefiAccountManager.any_instance.stubs(:sync_wallet!).raises(RuntimeError, "boom")
+    @mock_provider.stubs(:get_wallet_balances).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_balance).returns([])
+    @mock_provider.stubs(:get_wallet_transactions).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_transactions).returns([])
+
+    result = CoinstatsItem::Importer.new(@coinstats_item, coinstats_provider: @mock_provider).import
+
+    refute result[:success]
+    assert_equal 1, result[:accounts_failed]
+  end
 end

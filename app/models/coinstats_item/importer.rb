@@ -705,8 +705,12 @@ class CoinstatsItem::Importer
 
       failed_wallet_keys
     rescue => e
-      Rails.logger.warn "CoinstatsItem::Importer - DeFi sync failed: #{e.message}"
-      Set.new
+      # Never report an unexpected crash as a successful DeFi refresh: mark every
+      # wallet that was not already reported as failed.
+      Rails.logger.warn "CoinstatsItem::Importer - DeFi sync failed: #{e.class}: #{e.message}"
+      Array(unique_wallets).each_with_object(failed_wallet_keys || Set.new) do |wallet, keys|
+        keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
+      end
     end
 
     def defi_supported_blockchain?(blockchain)
