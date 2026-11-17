@@ -1091,4 +1091,32 @@ class CoinstatsItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 70_272.0, defi_account.reload.current_balance.to_f
     refute result[:success]
   end
+
+  test "CoinStats DeFi refresh never zeroes accounts created by Zerion" do
+    wallet = @family.accounts.create!(accountable: Crypto.create!, name: "Ethereum Wallet", balance: 0, currency: "USD")
+    wallet_account = @coinstats_item.coinstats_accounts.create!(
+      name: "Ethereum", currency: "USD", account_id: "ethereum",
+      raw_payload: { address: "0x123abc", blockchain: "ethereum" }
+    )
+    AccountProvider.create!(account: wallet, provider: wallet_account)
+
+    zerion_local = @family.accounts.create!(accountable: Crypto.create!, name: "stETH", balance: 30_000, currency: "USD")
+    zerion_account = @coinstats_item.coinstats_accounts.create!(
+      name: "STETH (Lido Staking)", currency: "USD", account_id: "defi:zerion:ethereum:steth-lido",
+      wallet_address: "0x123abc", current_balance: 30_000,
+      raw_payload: { source: "defi", defi_provider: "zerion", address: "0x123abc", blockchain: "ethereum", amount: "10", balance: 30_000 }
+    )
+    AccountProvider.create!(account: zerion_local, provider: zerion_account)
+
+    @mock_provider.stubs(:get_wallet_balances).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_balance).returns([])
+    @mock_provider.stubs(:get_wallet_transactions).returns(success_response([]))
+    @mock_provider.stubs(:extract_wallet_transactions).returns([])
+
+    result = CoinstatsItem::Importer.new(@coinstats_item, coinstats_provider: @mock_provider).import
+
+    assert_equal 30_000.0, zerion_account.reload.current_balance.to_f
+    assert_equal "coinstats", result[:defi][:provider]
+    assert_equal 1, result[:defi][:inactive_provider_accounts]
+  end
 end

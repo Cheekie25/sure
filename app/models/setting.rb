@@ -68,6 +68,11 @@ class Setting < RailsSettings::Base
   field :alpha_vantage_api_key, type: :string, default: ENV["ALPHA_VANTAGE_API_KEY"]
   field :tinkoff_invest_api_key, type: :string, default: ENV["TINKOFF_INVEST_API_KEY"]
 
+  # DeFi positions provider for CoinStats wallet connections ("coinstats" or "zerion").
+  # Defaults to CoinStats; Zerion is only used when an administrator selects it.
+  field :coinstats_defi_provider, type: :string, default: ENV.fetch("COINSTATS_DEFI_PROVIDER", "coinstats")
+  field :zerion_api_key, type: :string, default: ENV["ZERION_API_KEY"]
+
   # Property valuation (AVM) provider API keys
   field :rentcast_api_key, type: :string, default: ENV["RENTCAST_API_KEY"]
   field :realie_api_key, type: :string, default: ENV["REALIE_API_KEY"]
@@ -88,6 +93,7 @@ class Setting < RailsSettings::Base
       tinkoff_invest_api_key
       rentcast_api_key
       realie_api_key
+      zerion_api_key
       openai_access_token
       anthropic_access_token
       external_assistant_token

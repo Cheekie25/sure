@@ -45,7 +45,8 @@ class CoinstatsItem::Importer
     wallet_accounts = linked_accounts.select(&:wallet_source?)
     exchange_accounts = linked_accounts.select(&:exchange_source?)
 
-    failed_defi_wallet_keys = sync_defi_for_wallets!(wallet_accounts)
+    defi_report = sync_defi_for_wallets!(wallet_accounts)
+    failed_defi_wallet_keys = defi_report[:failed_wallet_keys]
     accounts_failed += failed_defi_wallet_keys.size
 
     bulk_balance_data = fetch_balances_for_accounts(wallet_accounts)
@@ -61,7 +62,8 @@ class CoinstatsItem::Importer
         accounts_failed: accounts_failed,
         transactions_imported: 0,
         wallet_fetch_failed: true,
-        defi_failed_wallets: masked_wallet_keys(failed_defi_wallet_keys)
+        defi_failed_wallets: defi_report[:errors].map { |error| error[:wallet] }.sort,
+        defi: defi_report
       }
     end
 
@@ -80,9 +82,16 @@ class CoinstatsItem::Importer
           elsif coinstats_account.defi_source?
             # DeFi/staking accounts are kept up to date by sync_defi_for_wallets! above.
             # Mark as failed if the wallet sync for this account's address didn't succeed.
+            # Accounts owned by another DeFi provider (e.g. CoinStats accounts while Zerion
+            # is active) are preserved untouched and reported as not refreshed.
             raw = coinstats_account.raw_payload.to_h.with_indifferent_access
             wallet_key = "#{raw[:blockchain]}:#{raw[:address]}".downcase
-            { success: !failed_defi_wallet_keys.include?(wallet_key), transactions_count: 0 }
+            if CoinstatsItem::DefiAccountManager.defi_provider_for(raw) != defi_report[:provider]
+              defi_report[:inactive_provider_accounts] += 1
+              { success: true, transactions_count: 0 }
+            else
+              { success: !failed_defi_wallet_keys.include?(wallet_key), transactions_count: 0 }
+            end
           else
             update_wallet_account(
               coinstats_account,
@@ -105,7 +114,8 @@ class CoinstatsItem::Importer
       accounts_updated: accounts_updated,
       accounts_failed: accounts_failed,
       transactions_imported: transactions_imported,
-      defi_failed_wallets: masked_wallet_keys(failed_defi_wallet_keys)
+      defi_failed_wallets: defi_report[:errors].map { |error| error[:wallet] }.sort,
+      defi: defi_report
     }
   end
 
@@ -681,9 +691,29 @@ class CoinstatsItem::Importer
 
     # Syncs DeFi/staking positions for all unique wallet addresses by delegating
     # to DefiAccountManager, which owns discovery, upsert, and zero-out logic.
-    # Returns a Set of "blockchain:address" keys for wallets that failed to sync,
-    # so the caller can accurately mark individual DeFi accounts as failed.
+    # The DeFi data provider (CoinStats or Zerion) comes from CoinstatsItem::DefiSource.
+    #
+    # Returns a report Hash:
+    #   provider:                   DeFi provider key used for this sync
+    #   failed_wallet_keys:         Set of "blockchain:address" keys whose DeFi refresh failed
+    #   errors:                     Array of { wallet:, message: } (addresses masked)
+    #   positions:                  number of active positions refreshed
+    #   zeroed:                     number of positions zeroed because they disappeared
+    #   skipped:                    Hash of reason => count for ignored provider legs (loans, spam...)
+    #   unsupported:                number of wallets the provider cannot serve
+    #   inactive_provider_accounts: filled by #import, DeFi accounts owned by the other provider
     def sync_defi_for_wallets!(wallet_accounts)
+      report = {
+        provider: CoinstatsItem::DefiSource.configured_provider,
+        failed_wallet_keys: Set.new,
+        errors: [],
+        positions: 0,
+        zeroed: 0,
+        skipped: Hash.new(0),
+        unsupported: 0,
+        inactive_provider_accounts: 0
+      }
+
       # Include existing DeFi accounts as address sources so staking positions stay
       # current even if the parent wallet account has been removed.
       defi_accounts = coinstats_item.coinstats_accounts.joins(:account_provider).select(&:defi_source?)
@@ -696,44 +726,59 @@ class CoinstatsItem::Importer
         { address: raw[:address], blockchain: raw[:blockchain] }
       end.uniq { |w| [ w[:address].downcase, w[:blockchain].downcase ] }
 
-      return Set.new if unique_wallets.empty?
+      return report if unique_wallets.empty?
+
+      begin
+        source = CoinstatsItem::DefiSource.build(coinstats_provider: coinstats_provider, provider_key: report[:provider])
+      rescue CoinstatsItem::DefiSource::ConfigurationError => e
+        unique_wallets.each { |wallet| record_defi_failure(report, wallet, e.message) }
+        return report
+      end
 
       manager = CoinstatsItem::DefiAccountManager.new(coinstats_item)
-      failed_wallet_keys = Set.new
 
       unique_wallets.each do |wallet|
-        result = manager.sync_wallet!(address: wallet[:address], blockchain: wallet[:blockchain], provider: coinstats_provider)
-        next if result
+        outcome = manager.sync_wallet!(address: wallet[:address], blockchain: wallet[:blockchain], source: source)
 
-        failed_wallet_keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
-        log_debug_event(
-          level: "warn",
-          message: "CoinStats DeFi positions not refreshed; existing positions preserved",
-          metadata: {
-            coinstats_item_id: coinstats_item.id,
-            wallet: masked_wallet_keys([ "#{wallet[:blockchain]}:#{wallet[:address]}" ]).first
-          }
-        )
+        if outcome.failed?
+          record_defi_failure(report, wallet, outcome.error)
+        elsif outcome.unsupported?
+          report[:unsupported] += 1
+        else
+          report[:positions] += outcome.positions_count
+          report[:zeroed] += outcome.zeroed_count
+        end
+        outcome.skipped.each { |reason, count| report[:skipped][reason] += count }
       end
 
-      failed_wallet_keys
+      report
     rescue => e
-      # Never report an unexpected crash as a successful DeFi refresh: mark every
-      # wallet that was not already reported as failed.
+      # Never report an unexpected crash as a successful DeFi refresh.
       Rails.logger.warn "CoinstatsItem::Importer - DeFi sync failed: #{e.class}: #{e.message}"
-      Array(unique_wallets).each_with_object(failed_wallet_keys || Set.new) do |wallet, keys|
-        keys << "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
-      end
+      Array(unique_wallets).each { |wallet| record_defi_failure(report, wallet, "#{e.class.name}: #{e.message}") }
+      report
     end
 
-    # "ethereum:0x1234...abcd" - wallet keys are reported to the UI and logs
-    # without the full address.
-    def masked_wallet_keys(keys)
-      Array(keys).map do |key|
-        blockchain, address = key.to_s.split(":", 2)
-        address = "#{address[0, 6]}...#{address[-4, 4]}" if address.to_s.length > 10
-        "#{blockchain}:#{address}"
-      end.sort
+    def record_defi_failure(report, wallet, message)
+      key = "#{wallet[:blockchain]}:#{wallet[:address]}".downcase
+      return if report[:failed_wallet_keys].include?(key)
+
+      report[:failed_wallet_keys] << key
+      report[:errors] << {
+        wallet: "#{wallet[:blockchain]}:#{Provider::Zerion.mask_address(wallet[:address])}",
+        message: message.to_s.truncate(300)
+      }
+
+      log_debug_event(
+        level: "warn",
+        message: "DeFi positions not refreshed (#{report[:provider]}); existing positions preserved",
+        metadata: {
+          coinstats_item_id: coinstats_item.id,
+          defi_provider: report[:provider],
+          wallet: "#{wallet[:blockchain]}:#{Provider::Zerion.mask_address(wallet[:address])}",
+          error_message: message.to_s.truncate(300)
+        }
+      )
     end
 
     def defi_supported_blockchain?(blockchain)

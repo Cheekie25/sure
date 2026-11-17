@@ -11,3 +11,16 @@ en:
     lunchflow_import_error: "Lunchflow import: %{error}"
     coinstats_wallet_refresh_failed: "Wallet balances could not be refreshed from CoinStats. Existing balances were kept."
     coinstats_defi_refresh_failed: "DeFi positions could not be refreshed for %{wallet}. Existing positions were kept."
+    coinstats_defi_refresh_failed_with_reason: "DeFi positions could not be refreshed via %{provider} for %{wallet}: %{error}. Existing positions were kept."
+    coinstats_defi_loans_skipped:
+      one: "%{provider}: %{count} borrow position was ignored (debts are not imported as DeFi accounts)."
+      other: "%{provider}: %{count} borrow positions were ignored (debts are not imported as DeFi accounts)."
+    coinstats_defi_unsupported_wallets:
+      one: "%{provider} does not provide DeFi positions for %{count} linked wallet blockchain."
+      other: "%{provider} does not provide DeFi positions for %{count} linked wallet blockchains."
+    coinstats_defi_inactive_provider_accounts:
+      one: "%{count} DeFi account created by another DeFi provider was kept but not refreshed. Hide it if it duplicates a position now tracked by %{provider}."
+      other: "%{count} DeFi accounts created by another DeFi provider were kept but not refreshed. Hide them if they duplicate positions now tracked by %{provider}."
+    defi_provider_names:
+      coinstats: CoinStats
+      zerion: Zerion

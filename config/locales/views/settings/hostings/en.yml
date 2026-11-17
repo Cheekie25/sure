@@ -22,6 +22,7 @@ en:
         ai_assistant: AI Assistant
         financial_data_providers: Financial Data Providers
         property_valuation_providers: Property Valuation Providers
+        defi_data_provider: DeFi Positions Provider
         sync_settings: Sync Settings
         invites: Invite Codes
         title: Self-Hosting
@@ -171,6 +172,24 @@ en:
         label: API Key
         placeholder: Enter your Realie API key here
         usage: "%{used} of %{limit} monthly requests used"
+      defi_provider_settings:
+        provider_title: DeFi positions source
+        provider_description: Choose which service refreshes the DeFi and staking positions (Lido, Aave, liquidity pools...) of wallets linked through CoinStats. Wallet balances, exchanges and transactions always use CoinStats. Switching does not delete or modify accounts created by the other provider.
+        provider_label: DeFi provider
+        provider_env_configured_message: Set through the COINSTATS_DEFI_PROVIDER environment variable.
+        providers:
+          coinstats: CoinStats (default)
+          zerion: Zerion
+        zerion_title: Zerion API key
+        zerion_description: Required only when Zerion is selected. The free Developer plan allows 2,000 requests per day; DeFi position requests count toward a 25% sub-quota.
+        zerion_env_configured_message: Successfully configured through the ZERION_API_KEY environment variable.
+        zerion_label: API key
+        zerion_placeholder: Enter your Zerion API key here
+        zerion_missing_key_warning: Zerion is selected but no API key is configured. DeFi positions will not be refreshed until a key is added.
+        show_details: "(show details)"
+        zerion_step_1_html: 'Visit the <a href="https://dashboard.zerion.io" target="_blank" rel="noopener noreferrer" class="underline">Zerion dashboard</a> and create an account.'
+        zerion_step_2: Create an API key.
+        zerion_step_3: Copy the key and paste it below.
       tiingo_settings:
         title: Tiingo
         description: Enter the API token provided by Tiingo. Free tier supports 50 unique symbols per hour with 30+ years of historical data.
@@ -233,6 +252,7 @@ en:
         failure: Invalid setting value
         success: Settings updated
         invalid_onboarding_state: Invalid onboarding state
+        invalid_defi_provider: Invalid DeFi provider
         invalid_sync_time: Invalid sync time format. Please use HH:MM format (e.g., 02:30).
         invalid_llm_budget: "%{field} must be a whole number ≥ %{minimum}."
         invalid_anthropic_base_url: Anthropic Base URL must be an http(s) URL.

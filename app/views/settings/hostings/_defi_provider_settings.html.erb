@@ -1,0 +1,69 @@
+<div class="space-y-4">
+  <div class="space-y-2">
+    <h3 class="font-medium text-sm"><%= t(".provider_title") %></h3>
+    <p class="text-secondary text-xs mb-2"><%= t(".provider_description") %></p>
+
+    <%= styled_form_with model: Setting.new,
+                         url: settings_hosting_path,
+                         method: :patch,
+                         data: {
+                           controller: "auto-submit-form",
+                           "auto-submit-form-trigger-event-value": "change"
+                         } do |form| %>
+      <%= form.select :coinstats_defi_provider,
+                      [
+                        [t(".providers.coinstats"), "coinstats"],
+                        [t(".providers.zerion"), "zerion"]
+                      ],
+                      { label: t(".provider_label") },
+                      {
+                        value: CoinstatsItem::DefiSource.configured_provider,
+                        disabled: ENV["COINSTATS_DEFI_PROVIDER"].present?,
+                        data: { "auto-submit-form-target": "auto" }
+                      } %>
+    <% end %>
+    <% if ENV["COINSTATS_DEFI_PROVIDER"].present? %>
+      <p class="text-xs text-secondary"><%= t(".provider_env_configured_message") %></p>
+    <% end %>
+  </div>
+
+  <div class="space-y-2">
+    <% has_key = CoinstatsItem::DefiSource.zerion_api_key.present? %>
+    <h3 class="font-medium text-sm"><%= t(".zerion_title") %></h3>
+    <% if ENV["ZERION_API_KEY"].present? %>
+      <p class="text-sm text-secondary"><%= t(".zerion_env_configured_message") %></p>
+    <% else %>
+      <div class="text-secondary text-xs mb-2">
+        <span><%= t(".zerion_description") %></span>
+        <details class="inline">
+          <summary class="cursor-pointer font-medium text-secondary underline inline"> <%= t(".show_details") %></summary>
+          <ol class="text-xs text-secondary mt-2 list-decimal ml-6 space-y-2">
+            <li><%= t(".zerion_step_1_html") %></li>
+            <li><%= t(".zerion_step_2") %></li>
+            <li><%= t(".zerion_step_3") %></li>
+          </ol>
+        </details>
+      </div>
+    <% end %>
+
+    <%= styled_form_with model: Setting.new,
+                         url: settings_hosting_path,
+                         method: :patch,
+                         data: {
+                           controller: "auto-submit-form",
+                           "auto-submit-form-trigger-event-value": "blur"
+                         } do |form| %>
+      <%= form.text_field :zerion_api_key,
+                          label: t(".zerion_label"),
+                          type: "password",
+                          placeholder: t(".zerion_placeholder"),
+                          value: has_key ? "********" : "",
+                          disabled: ENV["ZERION_API_KEY"].present?,
+                          data: { "auto-submit-form-target": "auto" } %>
+    <% end %>
+
+    <% if CoinstatsItem::DefiSource.configured_provider == "zerion" && !has_key %>
+      <p class="text-xs text-warning"><%= t(".zerion_missing_key_warning") %></p>
+    <% end %>
+  </div>
+</div>

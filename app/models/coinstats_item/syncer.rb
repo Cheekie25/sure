@@ -44,7 +44,7 @@ class CoinstatsItem::Syncer
 
       # CoinStats provides transactions but not activity labels (Buy, Sell, Dividend, etc.)
       # Warn users that this may affect budget accuracy
-      collect_investment_data_quality_warning(sync, linked_accounts)
+      collect_investment_data_quality_warning(sync, linked_accounts, extra_details: defi_notices(import_result))
 
       # Phase 4: Schedule balance calculations for linked accounts
       sync.update!(status_text: I18n.t("models.coinstats_item.syncer.calculating_balances")) if sync.respond_to?(:status_text)
@@ -56,7 +56,7 @@ class CoinstatsItem::Syncer
     end
 
     if sync.respond_to?(:sync_stats)
-      # Merge so stats collected earlier in this sync (data quality warnings) are kept.
+      # Merge so stats collected earlier in this sync (data quality) are kept.
       sync.update!(sync_stats: (sync.sync_stats || {}).merge(sync_stats))
     end
   end
@@ -68,43 +68,97 @@ class CoinstatsItem::Syncer
 
   private
 
-    # Translates the importer result into health stats so a sync that could not
-    # refresh wallet balances or DeFi positions is not shown as fully successful.
-    # The sync itself still completes: existing balances were preserved.
-    def import_health_stats(import_result)
-      return {} unless import_result.is_a?(Hash)
-
-      errors = []
-      if import_result[:wallet_fetch_failed]
-        errors << { "message" => I18n.t("provider_warnings.coinstats_wallet_refresh_failed"), "category" => "coinstats_wallet_sync" }
-      end
-
-      Array(import_result[:defi_failed_wallets]).each do |wallet|
-        errors << { "message" => I18n.t("provider_warnings.coinstats_defi_refresh_failed", wallet: wallet), "category" => "defi_sync" }
-      end
-
-      if errors.any?
-        Rails.logger.warn("CoinstatsItem::Syncer - item #{coinstats_item.id} completed with #{errors.size} error(s): #{errors.map { |e| e["category"] }.tally}")
-      end
-
-      stats = { "import_started" => true, "total_errors" => errors.size }
-      stats["errors"] = errors if errors.any?
-      stats
-    end
-
     # Collects a data quality warning for all CoinStats accounts.
     # CoinStats cannot provide activity labels (Buy, Sell, Dividend, etc.) for transactions,
     # which may affect budget accuracy.
-    def collect_investment_data_quality_warning(sync, linked_coinstats_accounts)
+    def collect_investment_data_quality_warning(sync, linked_coinstats_accounts, extra_details: [])
       # All CoinStats accounts are crypto/investment accounts
       return if linked_coinstats_accounts.empty?
 
       collect_data_quality_stats(sync,
         warnings: linked_coinstats_accounts.size,
+        notices: extra_details.size,
         details: [ {
           message: I18n.t("provider_warnings.limited_investment_data"),
           severity: "warning"
-        } ]
+        } ] + extra_details
       )
+    end
+
+    # Translates the importer result into health stats so a sync that could not
+    # refresh DeFi positions or wallet balances is not shown as fully successful.
+    # The Sync itself still completes: existing balances were preserved.
+    def import_health_stats(import_result)
+      return {} unless import_result.is_a?(Hash)
+
+      defi = import_result[:defi].to_h
+      errors = []
+
+      if import_result[:wallet_fetch_failed]
+        errors << { "message" => I18n.t("provider_warnings.coinstats_wallet_refresh_failed"), "category" => "coinstats_wallet_sync" }
+      end
+
+      if defi[:errors].present?
+        defi[:errors].each do |error|
+          errors << {
+            "message" => I18n.t("provider_warnings.coinstats_defi_refresh_failed_with_reason",
+              provider: defi_provider_name(defi[:provider]), wallet: error[:wallet], error: error[:message]),
+            "category" => "defi_sync"
+          }
+        end
+      else
+        Array(import_result[:defi_failed_wallets]).each do |wallet|
+          errors << { "message" => I18n.t("provider_warnings.coinstats_defi_refresh_failed", wallet: wallet), "category" => "defi_sync" }
+        end
+      end
+
+      stats = { "import_started" => true, "total_errors" => errors.size }
+      stats["errors"] = errors if errors.any?
+      stats["defi_sync"] = defi_summary(defi) if defi.present?
+
+      if errors.any?
+        Rails.logger.warn("CoinstatsItem::Syncer - item #{coinstats_item.id} completed with #{errors.size} error(s): #{errors.map { |e| e["category"] }.tally}")
+      end
+
+      stats
+    end
+
+    def defi_summary(defi)
+      {
+        "provider" => defi[:provider],
+        "positions" => defi[:positions].to_i,
+        "zeroed" => defi[:zeroed].to_i,
+        "failed_wallets" => Array(defi[:failed_wallet_keys]).size,
+        "unsupported_wallets" => defi[:unsupported].to_i,
+        "skipped" => defi[:skipped].to_h,
+        "inactive_provider_accounts" => defi[:inactive_provider_accounts].to_i
+      }
+    end
+
+    def defi_notices(import_result)
+      return [] unless import_result.is_a?(Hash)
+
+      defi = import_result[:defi].to_h
+      return [] if defi.blank?
+
+      provider = defi_provider_name(defi[:provider])
+      notices = []
+
+      loans = defi[:skipped].to_h["loan"].to_i
+      notices << { message: I18n.t("provider_warnings.coinstats_defi_loans_skipped", count: loans, provider: provider), severity: "info" } if loans.positive?
+
+      if defi[:unsupported].to_i.positive?
+        notices << { message: I18n.t("provider_warnings.coinstats_defi_unsupported_wallets", count: defi[:unsupported].to_i, provider: provider), severity: "info" }
+      end
+
+      if defi[:inactive_provider_accounts].to_i.positive?
+        notices << { message: I18n.t("provider_warnings.coinstats_defi_inactive_provider_accounts", count: defi[:inactive_provider_accounts].to_i, provider: provider), severity: "warning" }
+      end
+
+      notices
+    end
+
+    def defi_provider_name(key)
+      I18n.t("provider_warnings.defi_provider_names.#{key.presence || CoinstatsItem::DefiSource::DEFAULT_PROVIDER}", default: key.to_s.titleize)
     end
 end

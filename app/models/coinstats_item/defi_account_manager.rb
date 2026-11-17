@@ -1,9 +1,23 @@
 # frozen_string_literal: true
 
 # Manages DeFi/staking accounts for a CoinStats wallet connection.
-# Discovers staking, LP, and yield farming positions via the CoinStats DeFi API
-# and keeps the corresponding CoinstatsAccounts up to date.
+# Positions come from a DeFi source (CoinStats or Zerion, see
+# CoinstatsItem::DefiSource) as normalized CoinstatsItem::DefiPosition objects;
+# this class only creates, updates and zeroes CoinstatsAccounts.
+#
+# Safety rules:
+# - a provider error or invalid response never touches existing accounts;
+# - positions missing from a complete, valid response are zeroed (never deleted);
+# - zero-out is scoped to the provider that produced the response, so switching
+#   between CoinStats and Zerion never zeroes the other provider's accounts.
 class CoinstatsItem::DefiAccountManager
+  # Outcome of one wallet sync.
+  Outcome = Data.define(:status, :provider, :error, :positions_count, :zeroed_count, :skipped) do
+    def success? = status == :ok
+    def failed? = status == :error
+    def unsupported? = status == :unsupported
+  end
+
   attr_reader :coinstats_item
 
   def initialize(coinstats_item)
@@ -11,60 +25,47 @@ class CoinstatsItem::DefiAccountManager
   end
 
   # Fetches DeFi positions for the given wallet and creates/updates CoinstatsAccounts.
-  # Positions that disappear from the API (fully unstaked) are zeroed out.
-  # Returns true on success, false on failure.
-  def sync_wallet!(address:, blockchain:, provider:)
+  # @param source [#key, #fetch] a CoinstatsItem::DefiSource implementation
+  # @return [Outcome]
+  def sync_wallet!(address:, blockchain:, source:)
     normalized_address = address.to_s.downcase
     normalized_blockchain = blockchain.to_s.downcase
 
-    response = provider.get_wallet_defi(address: address, connection_id: blockchain)
-    unless response.success?
-      Rails.logger.warn "CoinstatsItem::DefiAccountManager - DeFi fetch failed for #{normalized_blockchain}:#{normalized_address}"
-      return false
+    result = source.fetch(address: address, blockchain: blockchain)
+
+    if result.unsupported?
+      Rails.logger.info "CoinstatsItem::DefiAccountManager - #{source.key} skipped #{normalized_blockchain}:#{masked(normalized_address)}: #{result.error}"
+      return outcome(:unsupported, source, error: result.error)
     end
 
-    # A payload without a `protocols` array is invalid, not an empty wallet:
-    # treating it as empty would zero out every existing DeFi position.
-    defi_data = response.data.respond_to?(:to_h) ? response.data.to_h.with_indifferent_access : {}
-    unless defi_data[:protocols].is_a?(Array)
-      Rails.logger.warn "CoinstatsItem::DefiAccountManager - Invalid DeFi response (no protocols array) for #{normalized_blockchain}:#{normalized_address}; keeping existing positions"
-      return false
+    unless result.ok?
+      Rails.logger.warn "CoinstatsItem::DefiAccountManager - DeFi fetch failed (#{source.key}) for #{normalized_blockchain}:#{masked(normalized_address)}: #{result.error}"
+      return outcome(:error, source, error: result.error)
     end
-    protocols = defi_data[:protocols]
+
     active_defi_ids = []
     had_upsert_failures = false
 
-    protocols.each do |protocol|
-      protocol = protocol.with_indifferent_access
-
-      Array(protocol[:investments]).each do |investment|
-        investment = investment.with_indifferent_access
-
-        Array(investment[:assets]).each do |asset|
-          asset = asset.with_indifferent_access
-          next if asset[:amount].to_f.zero?
-          next if asset[:coinId].blank? && asset[:symbol].blank?
-
-          account_id = build_account_id(protocol, investment, asset, blockchain: normalized_blockchain)
-
-          if upsert_account!(address: normalized_address, blockchain: normalized_blockchain, protocol: protocol, investment: investment, asset: asset, account_id: account_id)
-            active_defi_ids << account_id
-          else
-            had_upsert_failures = true
-          end
-        end
+    # The same position can appear twice (e.g. provider duplicates); keep the first.
+    result.positions.uniq(&:account_id).each do |position|
+      if upsert_account!(address: normalized_address, blockchain: normalized_blockchain, position: position)
+        active_defi_ids << position.account_id
+      else
+        had_upsert_failures = true
       end
     end
 
-    # Skip zero-out when upserts failed — active_defi_ids is incomplete and we'd risk
+    # Skip zero-out when upserts failed: active_defi_ids is incomplete and we'd risk
     # zeroing accounts that are still active but failed to save this cycle.
-    return false if had_upsert_failures
+    if had_upsert_failures
+      return outcome(:error, source, error: "Failed to save one or more DeFi positions", positions_count: active_defi_ids.size, skipped: result.skipped)
+    end
 
-    zero_out_inactive_accounts!(normalized_address, normalized_blockchain, active_defi_ids)
-    true
+    zeroed = zero_out_inactive_accounts!(normalized_address, normalized_blockchain, active_defi_ids, provider: source.key)
+    outcome(:ok, source, positions_count: active_defi_ids.size, zeroed_count: zeroed, skipped: result.skipped)
   rescue => e
-    Rails.logger.warn "CoinstatsItem::DefiAccountManager - Sync failed for #{blockchain}:#{address}: #{e.message}"
-    false
+    Rails.logger.warn "CoinstatsItem::DefiAccountManager - Sync failed for #{blockchain}:#{masked(address)}: #{e.class}: #{e.message}"
+    outcome(:error, source, error: "#{e.class.name}: #{e.message}")
   end
 
   # Creates the local Account for a DeFi CoinstatsAccount if it doesn't exist yet.
@@ -92,106 +93,107 @@ class CoinstatsItem::DefiAccountManager
     false
   end
 
+  # Provider that produced a DeFi CoinstatsAccount. Accounts created before
+  # multi-provider support carry no marker and belong to CoinStats.
+  def self.defi_provider_for(raw_payload)
+    raw_payload.to_h.with_indifferent_access[:defi_provider].presence || CoinstatsItem::DefiSource::Coinstats::KEY
+  end
+
   private
 
-    # Builds a stable, unique account_id for a DeFi asset position.
-    # Format: "defi:<blockchain>:<protocol_id>:<investment_type>:<coin_id>:<asset_title>"
-    # Blockchain is included to avoid collisions when the same wallet address exists on
-    # multiple EVM-compatible chains (e.g. Ethereum and Polygon).
-    def build_account_id(protocol, investment, asset, blockchain:)
-      chain = blockchain.to_s.downcase.gsub(/\s+/, "_").presence || "unknown"
-      protocol_id = protocol[:id].to_s.downcase.gsub(/\s+/, "_").presence || "unknown"
-      coin_id = (asset[:coinId] || asset[:symbol]).to_s.downcase
-      title = asset[:title].to_s.downcase.gsub(/\s+/, "_").presence || "position"
-      investment_type = investment[:name].to_s.downcase.gsub(/\s+/, "_").presence
-      parts = [ "defi", chain, protocol_id, coin_id, title ]
-      parts.insert(3, investment_type) if investment_type.present?
-      parts.join(":")
+    def outcome(status, source, error: nil, positions_count: 0, zeroed_count: 0, skipped: {})
+      Outcome.new(status: status, provider: source&.key, error: error, positions_count: positions_count, zeroed_count: zeroed_count, skipped: skipped || {})
     end
 
-    def build_account_name(protocol, asset)
-      protocol_name = protocol[:name].to_s
-      symbol = asset[:symbol].to_s.upcase
+    def build_account_name(position)
+      protocol_name = position.protocol_name.to_s
+      symbol = position.symbol.to_s.upcase
 
-      case asset[:title].to_s.downcase
-      when "deposit", "supplied"
+      case position.title.to_s.downcase
+      when "deposit", "supplied", "staked"
         "#{symbol} (#{protocol_name} Staking)"
-      when "reward", "yield"
+      when "reward", "rewards", "yield"
         "#{symbol} (#{protocol_name} Rewards)"
       else
-        label = asset[:title].to_s.presence || "Position"
+        label = position.title.to_s.presence&.then { |t| t == t.downcase ? t.titleize : t } || "Position"
         "#{symbol} (#{protocol_name} #{label})"
       end
     end
 
     # Returns true on success, false on failure (so the caller can track active positions correctly).
-    def upsert_account!(address:, blockchain:, protocol:, investment:, asset:, account_id:)
+    def upsert_account!(address:, blockchain:, position:)
       coinstats_account = coinstats_item.coinstats_accounts.find_or_initialize_by(
-        account_id: account_id,
+        account_id: position.account_id,
         wallet_address: address
       )
 
-      # The DeFi API returns asset.price as a TotalValueDto (total position value, not per-token price).
-      # Store it as `balance` so inferred_current_balance uses it directly instead of quantity * price.
-      # Guard against a missing USD key falling back to the whole hash (which would raise on .to_f).
-      total_balance_usd = if asset[:price].is_a?(Hash)
-        price_hash = asset[:price].with_indifferent_access
-        (price_hash[:USD] || price_hash["USD"] || 0).to_f
-      else
-        asset[:price].to_f
-      end
-
-      # Convert the USD balance to the family's base currency for consistent portfolio reporting.
-      # convert_usd_balance returns the actual currency used — it may fall back to "USD" if the
-      # exchange rate is unavailable, so we use the returned currency rather than assuming success.
-      balance, actual_currency = convert_usd_balance(total_balance_usd, family_currency)
-      quantity = asset[:amount].to_f
-      per_token_price = quantity > 0 ? balance / quantity : 0
+      # Store the TOTAL position value as `balance` so inferred_current_balance uses it
+      # directly instead of quantity * price, converted to the family currency.
+      # convert_usd_balance returns the currency actually used: it falls back to USD
+      # when no exchange rate is available.
+      balance, actual_currency = convert_usd_balance(position.value_usd.to_d, family_currency)
+      quantity = position.quantity.to_d
+      per_token_price = quantity.positive? ? balance / quantity : 0
 
       snapshot = {
         source: "defi",
-        id: account_id,
+        defi_provider: position.provider,
+        id: position.account_id,
         address: address,
         blockchain: blockchain,
-        protocol_id: protocol[:id],
-        protocol_name: protocol[:name],
-        protocol_logo: protocol[:logo],
-        investment_type: investment[:name],
-        coinId: asset[:coinId],
-        symbol: asset[:symbol],
-        name: asset[:symbol].to_s.upcase,
-        amount: asset[:amount],
+        provider_chain_id: position.provider_chain_id,
+        protocol_id: position.protocol_id,
+        protocol_name: position.protocol_name,
+        protocol_logo: position.protocol_logo,
+        investment_type: position.investment_type,
+        position_type: position.position_type,
+        coinId: position.coin_id,
+        symbol: position.symbol,
+        name: position.symbol.to_s.upcase,
+        contract_address: position.contract_address,
+        amount: quantity.to_s("F"),
         balance: balance,
         priceUsd: per_token_price,
-        asset_title: asset[:title],
+        value_usd: position.value_usd.to_d.to_s("F"),
+        asset_title: position.title,
         currency: actual_currency,
-        institution_logo: protocol[:logo]
+        institution_logo: position.protocol_logo,
+        external_id: position.external_id
       }.compact
 
-      coinstats_account.name = build_account_name(protocol, asset) unless coinstats_account.persisted?
+      coinstats_account.name = build_account_name(position) unless coinstats_account.persisted?
       coinstats_account.currency = actual_currency
       coinstats_account.raw_payload = snapshot
       coinstats_account.current_balance = coinstats_account.inferred_current_balance(snapshot)
-      coinstats_account.institution_metadata = { logo: protocol[:logo] }.compact
+      coinstats_account.institution_metadata = { logo: position.protocol_logo }.compact
       coinstats_account.save!
 
       ensure_local_account!(coinstats_account)
       true
     rescue => e
-      Rails.logger.warn "CoinstatsItem::DefiAccountManager - Failed to upsert account #{account_id}: #{e.message}"
+      Rails.logger.warn "CoinstatsItem::DefiAccountManager - Failed to upsert account #{position.account_id}: #{e.class}: #{e.message}"
       false
     end
 
-    # Sets balance to zero for DeFi accounts no longer present in the API response.
-    def zero_out_inactive_accounts!(address, blockchain, active_defi_ids)
-      coinstats_item.coinstats_accounts.where(wallet_address: address).each do |account|
+    # Sets balance to zero for DeFi accounts of this provider no longer present in the
+    # (complete and valid) API response. Accounts are kept so history is preserved.
+    # @return [Integer] number of accounts zeroed
+    def zero_out_inactive_accounts!(address, blockchain, active_defi_ids, provider:)
+      zeroed = 0
+
+      coinstats_item.coinstats_accounts.where(wallet_address: address).find_each do |account|
         raw = account.raw_payload.to_h.with_indifferent_access
         next unless raw[:source] == "defi"
         next unless raw[:blockchain].to_s.casecmp?(blockchain.to_s)
+        next unless self.class.defi_provider_for(raw) == provider
         next if active_defi_ids.include?(account.account_id)
+        next if account.current_balance.to_d.zero? && raw[:amount].to_d.zero?
 
         account.update!(current_balance: 0, raw_payload: raw.merge(amount: 0, balance: 0, priceUsd: 0))
+        zeroed += 1
       end
+
+      zeroed
     end
 
     def family_currency
@@ -208,5 +210,9 @@ class CoinstatsItem::DefiAccountManager
     rescue => e
       Rails.logger.warn "CoinstatsItem::DefiAccountManager - FX conversion USD->#{target_currency} failed: #{e.message}"
       [ usd_amount, "USD" ]
+    end
+
+    def masked(address)
+      Provider::Zerion.mask_address(address)
     end
 end

@@ -27,9 +27,10 @@ class Settings::HostingsControllerTest < ActionDispatch::IntegrationTest
   teardown do
     # These tests persist global Setting.* values; reset them so state can't
     # leak into later (order-dependent) tests.
-    %i[anthropic_access_token anthropic_base_url anthropic_model llm_provider twelve_data_api_key openai_access_token external_assistant_token rentcast_api_key realie_api_key].each do |key|
+    %i[anthropic_access_token anthropic_base_url anthropic_model llm_provider twelve_data_api_key openai_access_token external_assistant_token rentcast_api_key realie_api_key zerion_api_key].each do |key|
       Setting.public_send("#{key}=", nil)
     end
+    Setting.coinstats_defi_provider = "coinstats"
   end
 
   test "cannot edit when self hosting is disabled" do
@@ -65,6 +66,28 @@ class Settings::HostingsControllerTest < ActionDispatch::IntegrationTest
       patch settings_hosting_url, params: { setting: { realie_api_key: "realie-token" } }
 
       assert_equal "realie-token", Setting.realie_api_key
+    end
+  end
+
+  test "can select Zerion as DeFi provider and store its api key" do
+    with_self_hosting do
+      patch settings_hosting_url, params: { setting: { coinstats_defi_provider: "zerion", zerion_api_key: "zk-token" } }
+
+      assert_equal "zerion", Setting.coinstats_defi_provider
+      assert_equal "zk-token", Setting.zerion_api_key
+
+      get settings_hosting_url
+      assert_response :success
+      assert_select "select[name='setting[coinstats_defi_provider]'] option[selected][value='zerion']"
+      refute_includes response.body, "zk-token"
+    end
+  end
+
+  test "rejects an unknown DeFi provider" do
+    with_self_hosting do
+      patch settings_hosting_url, params: { setting: { coinstats_defi_provider: "debank" } }
+
+      assert_equal "coinstats", Setting.coinstats_defi_provider
     end
   end
 

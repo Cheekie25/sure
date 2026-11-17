@@ -47,6 +47,9 @@
     <%= render "settings/hostings/realie_settings" %>
   </div>
 <% end %>
+<%= settings_section title: t(".defi_data_provider") do %>
+  <%= render "settings/hostings/defi_provider_settings" %>
+<% end %>
 <%= settings_section title: t(".sync_settings") do %>
   <%= render "settings/hostings/sync_settings" %>
 <% end %>
