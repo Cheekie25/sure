@@ -8,13 +8,18 @@
 # contract/mint. It is what the partial unique indexes on
 # onchain_wallet_accounts key off.
 module Onchain
-  Asset = Data.define(:kind, :symbol, :name, :decimals, :quantity, :contract, :notable) do
+  Asset = Data.define(:kind, :symbol, :name, :decimals, :quantity, :contract, :notable, :usd_price) do
     # `notable` means the data source treats this as a real asset the holder
     # probably cares about: a priced holding worth more than dust on an EVM
     # indexer, a place on Solana's verified token list. Anyone can mint a token
     # with a plausible three-letter symbol, so the symbol itself says nothing —
     # this is what separates an asset from an airdrop.
-    def initialize(kind:, symbol:, name:, decimals:, quantity:, contract:, notable: false)
+    #
+    # `usd_price` is the price of one unit in USD as reported by the data source
+    # itself (e.g. Blockscout's exchange_rate), or nil. It is only a fallback for
+    # assets the market data provider cannot quote; see
+    # OnchainWalletAccount::Processor#record_indexer_price.
+    def initialize(kind:, symbol:, name:, decimals:, quantity:, contract:, notable: false, usd_price: nil)
       super
     end
 
@@ -30,7 +35,7 @@ module Onchain
       )
     end
 
-    def self.token(kind:, symbol:, name:, decimals:, quantity:, contract:, notable: false)
+    def self.token(kind:, symbol:, name:, decimals:, quantity:, contract:, notable: false, usd_price: nil)
       new(
         kind: kind,
         symbol: symbol,
@@ -38,7 +43,8 @@ module Onchain
         decimals: decimals,
         quantity: quantity,
         contract: contract,
-        notable: notable
+        notable: notable,
+        usd_price: usd_price
       )
     end
 

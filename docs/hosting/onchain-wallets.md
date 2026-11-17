@@ -213,12 +213,25 @@ provider does not list that token, not that the balance is wrong.** Check the
 quantity, which is read straight from the chain. Native coins (BTC, ETH, SOL,
 POL, XDAI) and large-cap tokens are the well-covered case.
 
-Pricing by contract address instead of by symbol would close most of the gap, and
-the data is already close at hand — the EVM indexer returns an exchange rate per
-token and Jupiter returns a USD price per mint, neither of which this version
-uses for valuation. That change belongs to how crypto enters Sure's price
-pipeline rather than to this feature, so it is not something you can configure
-your way out of today.
+**Fallback on EVM networks: the indexer's own price.** Blockscout reports a USD
+exchange rate per token. When the crypto price provider has not quoted a token
+on any of the last 7 days (stETH on Binance, for example), that rate is stored
+as today's **provisional** price for the token and used to value the holding.
+Provisional prices are the ones the price importer replaces as soon as the
+provider returns a real quote, so a token the provider starts listing switches
+to provider prices on its own. A few caveats:
+
+- only today's price is known, so the value history of such a token starts the
+  day it was first synced (earlier days stay at zero rather than being guessed);
+- transfers are still priced only from provider data, so their cost basis stays
+  display-only;
+- the indexer's rate is used as-is; prices below 0.0001 USD cannot be stored and
+  stay unpriced;
+- Solana mints are not covered: Jupiter's per-mint price is not used yet.
+
+The indexer's rate moves on every read, so it is kept out of the change digest:
+an idle wallet still writes nothing, except that assets valued this way are
+revalued when their price changes.
 
 **DeFi positions are not seen at all.** Staked ETH, liquidity-pool tokens,
 lending positions and Solana stake accounts are invisible: only natively-held
@@ -277,8 +290,9 @@ applies.
 
 **One token shows zero while the others in the same wallet are fine.** Different
 cause: the price provider does not quote that token. Pricing is by symbol and
-covers major assets, so long-tail tokens are tracked by quantity and valued at
-zero. See "Limitations" — there is no setting that changes this.
+covers major assets. On EVM networks the indexer's own price is used as a
+fallback when it has one (see "Limitations"); a token neither of them prices is
+tracked by quantity and valued at zero.
 
 **A Bitcoin balance is much lower than my wallet app shows.** You are tracking one
 address of an HD wallet. See "Limitations".

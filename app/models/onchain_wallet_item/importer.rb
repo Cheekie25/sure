@@ -11,6 +11,9 @@
 # a newly seen token becomes trackable only when the user ticks it in the token
 # review screen.
 class OnchainWalletItem::Importer
+  # Key under which the data source's own USD price is kept in raw_payload.
+  INDEXER_PRICE_KEY = "indexer_usd_price"
+
   attr_reader :onchain_wallet_item
 
   def initialize(onchain_wallet_item)
@@ -78,15 +81,37 @@ class OnchainWalletItem::Importer
       # was left out once — a Solana placeholder that gained a real name produced
       # the old digest and was never rewritten — and then the truncation flags,
       # leaving the UI claiming an incomplete history after one became complete.
-      digest = Digest::SHA256.hexdigest(canonical(attributes).to_json)
+      digest = Digest::SHA256.hexdigest(canonical(without_volatile_price(attributes)).to_json)
 
-      return nil if account.content_hash == digest
+      if account.content_hash == digest
+        # The indexer's price moves on every read while the wallet sits still, so
+        # it is kept out of the digest (an idle wallet must stay idle) and stored
+        # quietly instead; the post-sync revaluation picks it up when it is used.
+        store_indexer_price(account, attributes)
+        return nil
+      end
 
       report_truncation(chain: chain, address: address, snapshot: snapshot) if snapshot.history_truncated? || snapshot.assets_truncated?
 
       account.update!(attributes.merge(content_hash: digest))
 
       account.id
+    end
+
+    def without_volatile_price(attributes)
+      payload = attributes[:raw_payload]
+      return attributes unless payload.is_a?(Hash) && payload.key?(INDEXER_PRICE_KEY)
+
+      attributes.merge(raw_payload: payload.except(INDEXER_PRICE_KEY))
+    end
+
+    def store_indexer_price(account, attributes)
+      price = attributes[:raw_payload].to_h[INDEXER_PRICE_KEY]
+      stored = account.raw_payload.to_h[INDEXER_PRICE_KEY]
+      return if price == stored
+
+      payload = account.raw_payload.to_h.merge(INDEXER_PRICE_KEY => price).compact
+      account.update_columns(raw_payload: payload, updated_at: Time.current)
     end
 
     # Key order carries no information, and jsonb does not preserve it: an `extra`
@@ -207,8 +232,9 @@ class OnchainWalletItem::Importer
         "name" => asset.name,
         "decimals" => asset.decimals,
         "contract" => asset.contract_key,
-        "quantity" => normalize(asset.quantity).to_s("F")
-      }
+        "quantity" => normalize(asset.quantity).to_s("F"),
+        INDEXER_PRICE_KEY => asset.usd_price&.to_d&.to_s("F")
+      }.compact
     end
 
     def movement_payload(movement)

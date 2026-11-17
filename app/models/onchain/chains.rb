@@ -59,7 +59,7 @@ module Onchain
         )
       end
 
-      def token_asset(symbol:, name:, decimals:, quantity:, contract:, notable: false)
+      def token_asset(symbol:, name:, decimals:, quantity:, contract:, notable: false, usd_price: nil)
         raise Error, "#{key} does not support tokens" unless supports_tokens?
 
         Onchain::Asset.token(
@@ -69,7 +69,8 @@ module Onchain
           decimals: decimals,
           quantity: quantity,
           contract: contract,
-          notable: notable
+          notable: notable,
+          usd_price: usd_price
         )
       end
     end

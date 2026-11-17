@@ -523,6 +523,39 @@ class OnchainWalletAccount::ProcessorTest < ActiveSupport::TestCase
     assert_not OnchainWalletAccount::Processor.new(unlinked).revalue
   end
 
+  test "values an asset the price provider does not list at the indexer's price" do
+    @onchain_account.update!(raw_payload: { OnchainWalletItem::Importer::INDEXER_PRICE_KEY => "1798.03" })
+
+    OnchainWalletAccount::Processor.new(@onchain_account).process
+
+    price = security.prices.find_by(date: Date.current)
+    assert price.provisional?, "the indexer price must stay replaceable by the provider"
+    assert_equal BigDecimal("1798.03"), price.price
+    assert_equal BigDecimal("3596.06"), @account.reload.balance
+  end
+
+  test "never uses the indexer's price for an asset the provider quotes" do
+    price_asset_at(Date.current - 1, 100)
+    @onchain_account.update!(raw_payload: { OnchainWalletItem::Importer::INDEXER_PRICE_KEY => "999" })
+
+    OnchainWalletAccount::Processor.new(@onchain_account).process
+
+    assert_nil security.prices.find_by(date: Date.current)
+    assert_equal 200, @account.reload.balance
+  end
+
+  test "revalue picks up a new indexer price on an idle asset" do
+    @onchain_account.update!(raw_payload: { OnchainWalletItem::Importer::INDEXER_PRICE_KEY => "10" })
+    OnchainWalletAccount::Processor.new(@onchain_account).process
+    assert_equal 20, @account.reload.balance
+
+    @onchain_account.update!(raw_payload: { OnchainWalletItem::Importer::INDEXER_PRICE_KEY => "11" })
+    assert OnchainWalletAccount::Processor.new(@onchain_account).revalue
+
+    assert_equal 22, @account.reload.balance
+    refute OnchainWalletAccount::Processor.new(@onchain_account).revalue, "an unchanged price is not rewritten"
+  end
+
   private
     def onchain_entry(movement_id)
       @account.entries.find_by!(external_id: "onchain_#{@onchain_account.id}_#{movement_id}")

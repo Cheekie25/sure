@@ -159,9 +159,14 @@ class Onchain::EvmAdapter
           decimals: token[:decimals],
           quantity: scale(token[:raw_amount], token[:decimals]),
           contract: token[:contract],
-          notable: notable?(token)
+          notable: notable?(token),
+          usd_price: positive_rate(token[:rate])
         )
       end
+    end
+
+    def positive_rate(rate)
+      rate.present? && rate.to_d.finite? && rate.to_d.positive? ? rate.to_d : nil
     end
 
     # A holding the indexer can price, worth more than dust.

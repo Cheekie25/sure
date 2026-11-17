@@ -120,6 +120,30 @@ class OnchainWalletItem::SyncerTest < ActiveSupport::TestCase
     end
   end
 
+  test "post sync revalues an indexer-priced asset when only its price moved" do
+    stub_wallet(assets: [ fake_native_asset(quantity: "2").with(usd_price: BigDecimal("10")) ])
+    OnchainWalletItem::Syncer.new(@item).perform_sync(@sync)
+    assert_equal 20, @account.reload.balance
+
+    stub_wallet(assets: [ fake_native_asset(quantity: "2").with(usd_price: BigDecimal("12")) ])
+    OnchainWalletItem::Syncer.new(@item).perform_sync(@item.syncs.create!)
+    OnchainWalletItem::Syncer.new(@item).perform_post_sync
+
+    assert_equal 24, @account.reload.balance
+  end
+
+  test "an idle indexer-priced asset whose price did not move is neither reprocessed nor rewritten" do
+    stub_wallet(assets: [ fake_native_asset(quantity: "2").with(usd_price: BigDecimal("10")) ])
+    OnchainWalletItem::Syncer.new(@item).perform_sync(@sync)
+
+    OnchainWalletAccount::Processor.any_instance.expects(:process).never
+    Account.any_instance.expects(:sync_later).never
+    OnchainWalletItem::Syncer.new(@item).perform_sync(@item.syncs.create!)
+    OnchainWalletItem::Syncer.new(@item).perform_post_sync
+
+    assert_equal 20, @account.reload.balance
+  end
+
   private
     def stub_wallet(quantity: "1", assets: nil)
       stub_fake_snapshot(

@@ -10,6 +10,9 @@ class OnchainWalletAccount::Processor
   # The label this processor writes on every movement. Named so the repair
   # below and the import above cannot drift apart.
   TRANSFER_LABEL = "Transfer"
+  # A security the price provider quoted (non-provisional price) this recently is
+  # considered covered by it, and the indexer's price is never used for it.
+  PROVIDER_COVERAGE_WINDOW = 7.days
 
   attr_reader :onchain_wallet_account
 
@@ -22,6 +25,7 @@ class OnchainWalletAccount::Processor
 
     security = resolve_security
     backfill_prices(security) if security
+    record_indexer_price(security) if security
     price = price_today(security)
     amount = price ? value_at(price) : 0.to_d
 
@@ -36,6 +40,7 @@ class OnchainWalletAccount::Processor
     return false unless account
 
     security = resolve_security
+    record_indexer_price(security) if security
     price = price_today(security)
     return false if price.nil?
 
@@ -88,6 +93,39 @@ class OnchainWalletAccount::Processor
   private
     def account
       onchain_wallet_account.current_account
+    end
+
+    # The data source's USD price for one unit, rounded to what security_prices
+    # can store, or nil when unknown or too small to store.
+    def indexer_usd_price
+      raw = onchain_wallet_account.raw_payload.to_h[OnchainWalletItem::Importer::INDEXER_PRICE_KEY]
+      return nil if raw.blank?
+
+      price = BigDecimal(raw.to_s).round(4)
+      price.finite? && price.positive? ? price : nil
+    rescue ArgumentError, TypeError
+      nil
+    end
+
+    def provider_quotes?(security)
+      security.prices.where(provisional: false, date: (Date.current - PROVIDER_COVERAGE_WINDOW)..).exists?
+    end
+
+    # Fallback for assets the market data provider does not list (e.g. stETH on
+    # Binance): today's price as reported by the chain indexer, stored as a
+    # provisional USD price. Provisional prices are the ones the price importer
+    # replaces as soon as the provider returns a real quote, so this never
+    # competes with provider data. Only today is written: the indexer gives no
+    # history, and inventing one would distort cost basis and charts.
+    def record_indexer_price(security)
+      usd_price = indexer_usd_price
+      return if usd_price.nil? || provider_quotes?(security)
+
+      Security::Price.upsert(
+        { security_id: security.id, date: Date.current, price: usd_price, currency: "USD", provisional: true },
+        unique_by: %i[security_id date currency]
+      )
+      security.prices.reset
     end
 
     def currency

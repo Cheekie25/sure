@@ -351,4 +351,31 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
 
     assert_equal [ "recent" ], account.reload.raw_movements_payload["movements"].map { |m| m["external_id"] }
   end
+
+  test "a price-only change is stored without marking the asset changed" do
+    account = create_onchain_wallet_account(item: @item, asset: fake_native_asset(quantity: 0))
+    snapshot = ->(price) { Onchain::Snapshot.new(assets: [ fake_native_asset(quantity: "2").with(usd_price: BigDecimal(price)) ], movements: []) }
+
+    stub_fake_snapshot(OnchainTestHelper::FAKE_ADDRESS, snapshot.call("10"))
+    assert_equal [ account.id ], OnchainWalletItem::Importer.new(@item).import[:changed_account_ids]
+    digest = account.reload.content_hash
+
+    stub_fake_snapshot(OnchainTestHelper::FAKE_ADDRESS, snapshot.call("12.5"))
+    assert_empty OnchainWalletItem::Importer.new(@item).import[:changed_account_ids]
+
+    account.reload
+    assert_equal digest, account.content_hash
+    assert_equal "12.5", account.raw_payload[OnchainWalletItem::Importer::INDEXER_PRICE_KEY]
+  end
+
+  test "a row stored before indexer prices existed keeps its digest" do
+    account = create_onchain_wallet_account(item: @item, asset: fake_native_asset(quantity: 0))
+    stub_fake_snapshot(OnchainTestHelper::FAKE_ADDRESS, Onchain::Snapshot.new(assets: [ fake_native_asset(quantity: "2") ], movements: []))
+    OnchainWalletItem::Importer.new(@item).import
+    digest = account.reload.content_hash
+
+    stub_fake_snapshot(OnchainTestHelper::FAKE_ADDRESS, Onchain::Snapshot.new(assets: [ fake_native_asset(quantity: "2").with(usd_price: BigDecimal("5")) ], movements: []))
+    assert_empty OnchainWalletItem::Importer.new(@item).import[:changed_account_ids]
+    assert_equal digest, account.reload.content_hash
+  end
 end

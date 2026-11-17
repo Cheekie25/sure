@@ -332,6 +332,21 @@ class Onchain::EvmAdapterTest < ActiveSupport::TestCase
     assert_not_equal ethereum.explorer_url, base.explorer_url
   end
 
+  test "keeps the indexer's USD price on token assets" do
+    stub_summary(coin_balance: "0")
+    stub_token_balances([
+      erc20(contract: USDC, symbol: "USDC", value: "2500000", rate: "0.9998"),
+      erc20(contract: "0xunpriced", symbol: "MEH", value: "5000000")
+    ])
+    stub_transactions([])
+    stub_token_transfers([])
+
+    snapshot = @adapter.fetch_snapshot(ADDRESS)
+
+    assert_equal BigDecimal("0.9998"), snapshot.find_asset(kind: "erc20", contract: USDC).usd_price
+    assert_nil snapshot.find_asset(kind: "erc20", contract: "0xunpriced").usd_price
+  end
+
   private
     def with_asset_budget(tokens)
       previous = ENV["ONCHAIN_MAX_TOKENS_PER_ADDRESS"]
