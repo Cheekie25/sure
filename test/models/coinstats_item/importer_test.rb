@@ -1039,6 +1039,7 @@ class CoinstatsItem::ImporterTest < ActiveSupport::TestCase
     # Wallet account still updated, but DeFi failure is counted
     assert_equal 1, result[:accounts_failed]
     refute result[:success]
+    assert_equal [ "ethereum:0x123abc" ], result[:defi_failed_wallets]
   end
 
   test "unexpected DeFi crash is reported as a failure, not a success" do

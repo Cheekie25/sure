@@ -9,3 +9,5 @@ en:
       one: "Lunchflow import: transaction fetch failed for %{count} account"
       other: "Lunchflow import: transaction fetch failed for %{count} accounts"
     lunchflow_import_error: "Lunchflow import: %{error}"
+    coinstats_wallet_refresh_failed: "Wallet balances could not be refreshed from CoinStats. Existing balances were kept."
+    coinstats_defi_refresh_failed: "DeFi positions could not be refreshed for %{wallet}. Existing positions were kept."

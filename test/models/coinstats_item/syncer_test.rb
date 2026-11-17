@@ -199,4 +199,27 @@ class CoinstatsItem::SyncerTest < ActiveSupport::TestCase
     assert_equal 1, stats["data_warnings"]
     assert stats["data_quality_details"].present?
   end
+
+  test "perform_sync reports DeFi and wallet refresh failures in health stats" do
+    sync = Sync.create!(syncable: @coinstats_item)
+    @coinstats_item.expects(:import_latest_coinstats_data).returns(
+      success: false, wallet_fetch_failed: true, defi_failed_wallets: [ "ethereum:0x1234...abcd" ]
+    )
+
+    @syncer.perform_sync(sync)
+
+    stats = sync.reload.sync_stats
+    assert_equal 2, stats["total_errors"]
+    assert_equal %w[coinstats_wallet_sync defi_sync], stats["errors"].map { |e| e["category"] }
+    assert_match "ethereum:0x1234...abcd", stats["errors"].last["message"]
+  end
+
+  test "perform_sync records zero errors after a successful import" do
+    sync = Sync.create!(syncable: @coinstats_item)
+    @coinstats_item.expects(:import_latest_coinstats_data).returns(success: true, defi_failed_wallets: [])
+
+    @syncer.perform_sync(sync)
+
+    assert_equal 0, sync.reload.sync_stats["total_errors"]
+  end
 end
