@@ -37,6 +37,7 @@ class Provider::Etherscan
     @api_key = api_key.to_s.strip
     @chain_id = chain_id.to_s
     @max_pages = max_pages
+    @max_retries = MAX_RETRIES
     @truncated = false
     raise AuthenticationError, "Etherscan API key is required" if @api_key.blank?
   end
@@ -66,6 +67,9 @@ class Provider::Etherscan
   private
     def native_transfers(address)
       paged_get(action: "txlist", address: address).filter_map do |transaction|
+        # A reverted transaction keeps its value field but moved nothing.
+        next if transaction["isError"].to_s == "1"
+
         raw_amount = signed_amount(transaction["value"], from: transaction["from"], to: transaction["to"], address: address)
         next if raw_amount.zero?
 
@@ -82,6 +86,8 @@ class Provider::Etherscan
     end
 
     def token_transfers(address)
+      occurrences = Hash.new(0)
+
       paged_get(action: "tokentx", address: address).filter_map do |transfer|
         contract = transfer["contractAddress"].to_s.presence&.downcase
         next if contract.blank?
@@ -90,7 +96,7 @@ class Provider::Etherscan
         next if raw_amount.zero?
 
         {
-          external_id: transfer_external_id(transfer["hash"], contract, transfer["logIndex"]),
+          external_id: transfer_external_id(transfer, contract, occurrences),
           contract: contract,
           symbol: transfer["tokenSymbol"],
           name: transfer["tokenName"],
@@ -102,9 +108,16 @@ class Provider::Etherscan
     end
 
     # See Provider::Blockscout#transfer_external_id: the log index is what makes
-    # one of several same-token transfers in a transaction distinct.
-    def transfer_external_id(transaction_hash, contract, log_index)
-      [ transaction_hash, log_index.presence || contract ].join("_")
+    # one of several same-token transfers in a transaction distinct. Where the
+    # API omits it, their position in the ascending history stands in, so they
+    # do not collapse into one movement.
+    def transfer_external_id(transfer, contract, occurrences)
+      log_index = transfer["logIndex"].presence
+      return [ transfer["hash"], log_index ].join("_") if log_index
+
+      base = [ transfer["hash"], contract ].join("_")
+      occurrences[base] += 1
+      occurrences[base] == 1 ? base : "#{base}_#{occurrences[base]}"
     end
 
     def signed_amount(value, from:, to:, address:)
@@ -154,25 +167,33 @@ class Provider::Etherscan
         attempts += 1
         throttle_request
         translate_transport_errors do
-          response = self.class.get("/api", query: {
-            apikey: api_key,
-            chainid: chain_id,
-            module: "account"
-          }.merge(params))
+          response = self.class.get(api_url, **request_options(query: authentication_params.merge(module: "account").merge(params)))
           handle_response(response)
         end
       rescue RateLimitError => e
-        raise if attempts > MAX_RETRIES
+        raise if attempts > @max_retries
 
-        Rails.logger.warn("Provider::Etherscan - rate limited (attempt #{attempts}/#{MAX_RETRIES}): #{e.message}")
+        Rails.logger.warn("#{self.class.name} - rate limited (attempt #{attempts}/#{@max_retries}): #{e.message}")
         sleep(RETRY_BASE_DELAY * (2**(attempts - 1)))
         retry
       end
     end
 
+    def api_url
+      "/api"
+    end
+
+    def authentication_params
+      { apikey: api_key, chainid: chain_id }
+    end
+
+    def request_options(**options)
+      options
+    end
+
     def throttle_request
       @last_request_at ||= Time.at(0)
-      remaining = MIN_REQUEST_INTERVAL - (Time.current - @last_request_at)
+      remaining = self.class::MIN_REQUEST_INTERVAL - (Time.current - @last_request_at)
       sleep(remaining) if remaining.positive?
       @last_request_at = Time.current
     end

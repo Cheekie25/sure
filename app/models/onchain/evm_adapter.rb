@@ -25,10 +25,11 @@ class Onchain::EvmAdapter
 
   attr_reader :chain, :explorer_url, :etherscan_chain_id
 
-  def initialize(chain:, explorer_url:, etherscan_chain_id: nil, credentials: {})
+  def initialize(chain:, explorer_url:, etherscan_chain_id: nil, explorer_backend: nil, credentials: {})
     @chain = chain.to_s
     @explorer_url = explorer_url
     @etherscan_chain_id = etherscan_chain_id
+    @explorer_backend = explorer_backend
     @credentials = credentials
   end
 
@@ -101,14 +102,18 @@ class Onchain::EvmAdapter
   end
 
   private
-    attr_reader :credentials
+    attr_reader :credentials, :explorer_backend
 
     def definition
       Onchain::Chains.find!(chain)
     end
 
+    def keyless_backend_class
+      explorer_backend == "routescan" ? Provider::Routescan : Provider::Blockscout
+    end
+
     def keyless_backend
-      @keyless_backend ||= Provider::Blockscout.new(
+      @keyless_backend ||= keyless_backend_class.new(
         chain: chain,
         base_url: explorer_url,
         max_pages: Onchain::HistoryBudget.pages
@@ -119,7 +124,7 @@ class Onchain::EvmAdapter
     # reads with the detection budget rather than the sync's: one short attempt,
     # no retry.
     def detection_backend
-      @detection_backend ||= Provider::Blockscout.new(
+      @detection_backend ||= keyless_backend_class.new(
         chain: chain,
         base_url: explorer_url,
         request_timeout: Onchain::DetectionBudget.timeout,

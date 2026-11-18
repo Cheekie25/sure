@@ -33,7 +33,13 @@ module Onchain
 
     NativeAsset = Data.define(:symbol, :name, :decimals)
 
-    Definition = Data.define(:key, :native, :token_kind, :adapter_class_name, :adapter_options) do
+    # `price_chain` is the network's name at the historical token price source;
+    # a chain without one has no contract-based price history.
+    Definition = Data.define(:key, :native, :token_kind, :adapter_class_name, :adapter_options, :price_chain) do
+      def initialize(price_chain: nil, **attributes)
+        super
+      end
+
       def label
         I18n.t("onchain.chains.#{key}", default: key.to_s.titleize)
       end
@@ -80,14 +86,16 @@ module Onchain
 
     # Every EVM network shares one adapter; what makes them different is data.
     # `etherscan_chain_id` is set only where a family-supplied Etherscan key is
-    # accepted, which today is Ethereum alone.
+    # accepted, which today is Ethereum alone. `explorer_backend` names the
+    # keyless data source when it is not Blockscout.
     EVM = [
-      { key: ETHEREUM, symbol: "ETH",  name: "Ethereum", explorer_url: "https://eth.blockscout.com",      etherscan_chain_id: "1" },
-      { key: "base",     symbol: "ETH",  name: "Ethereum", explorer_url: "https://base.blockscout.com" },
-      { key: "arbitrum", symbol: "ETH",  name: "Ethereum", explorer_url: "https://arbitrum.blockscout.com" },
-      { key: "optimism", symbol: "ETH",  name: "Ethereum", explorer_url: "https://optimism.blockscout.com" },
-      { key: "polygon",  symbol: "POL",  name: "Polygon",  explorer_url: "https://polygon.blockscout.com" },
-      { key: "gnosis",   symbol: "XDAI", name: "xDai",     explorer_url: "https://gnosis.blockscout.com" }
+      { key: ETHEREUM, symbol: "ETH",  name: "Ethereum", price_chain: "ethereum", explorer_url: "https://eth.blockscout.com", etherscan_chain_id: "1" },
+      { key: "base",      symbol: "ETH",  name: "Ethereum",  price_chain: "base",     explorer_url: "https://base.blockscout.com" },
+      { key: "arbitrum",  symbol: "ETH",  name: "Ethereum",  price_chain: "arbitrum", explorer_url: "https://arbitrum.blockscout.com" },
+      { key: "optimism",  symbol: "ETH",  name: "Ethereum",  price_chain: "optimism", explorer_url: "https://optimism.blockscout.com" },
+      { key: "polygon",   symbol: "POL",  name: "Polygon",   price_chain: "polygon",  explorer_url: "https://polygon.blockscout.com" },
+      { key: "gnosis",    symbol: "XDAI", name: "xDai",      price_chain: "xdai",     explorer_url: "https://gnosis.blockscout.com" },
+      { key: "avalanche", symbol: "AVAX", name: "Avalanche", price_chain: "avax",     explorer_url: "https://api.routescan.io/v2/network/mainnet/evm/43114", explorer_backend: "routescan" }
     ].freeze
 
     SOLANA = "solana"
@@ -109,11 +117,13 @@ module Onchain
           key: evm[:key],
           native: NativeAsset.new(symbol: evm[:symbol], name: evm[:name], decimals: 18),
           token_kind: "erc20",
+          price_chain: evm[:price_chain],
           adapter_class_name: "Onchain::EvmAdapter",
           adapter_options: {
             chain: evm[:key],
             explorer_url: evm[:explorer_url],
-            etherscan_chain_id: evm[:etherscan_chain_id]
+            etherscan_chain_id: evm[:etherscan_chain_id],
+            explorer_backend: evm[:explorer_backend]
           }.compact
         )
       end,

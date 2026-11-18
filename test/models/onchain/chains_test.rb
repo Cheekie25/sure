@@ -19,6 +19,15 @@ class Onchain::ChainsTest < ActiveSupport::TestCase
     assert_includes Onchain::Chains.keys, OnchainTestHelper::FAKE_CHAIN
   end
 
+  test "Avalanche reads through the keyless Routescan backend and prices tokens by contract" do
+    definition = Onchain::Chains.find!("avalanche")
+
+    assert_equal "AVAX", definition.native.symbol
+    assert_equal "avax", definition.price_chain
+    assert_equal "Avalanche", definition.label
+    assert_instance_of Provider::Routescan, definition.adapter.balance_backend
+  end
+
   test "unregistering removes the chain" do
     unregister_fake_chain!
 

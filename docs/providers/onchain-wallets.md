@@ -76,6 +76,7 @@ listed, so the cause is visible without having to reproduce it.
 | Optimism | Blockscout (`optimism.blockscout.com`) | No | `BLOCKSCOUT_OPTIMISM_URL` |
 | Polygon | Blockscout (`polygon.blockscout.com`) | No | `BLOCKSCOUT_POLYGON_URL` |
 | Gnosis | Blockscout (`gnosis.blockscout.com`) | No | `BLOCKSCOUT_GNOSIS_URL` |
+| Avalanche C-Chain | Routescan (`api.routescan.io`) | No | `ROUTESCAN_AVALANCHE_URL` |
 | Solana | Public JSON-RPC (`api.mainnet-beta.solana.com`) | No | `SOLANA_RPC_URL` |
 | Solana token names | Jupiter token search (`lite-api.jup.ag`) | No | `SOLANA_TOKEN_LIST_URL` |
 | Cosmos Hub | Public REST node (`cosmos-rest.publicnode.com`) | No | `COSMOS_REST_URL` |
@@ -110,6 +111,7 @@ address, the cost is roughly:
 |---|---|
 | Bitcoin | 1 + up to 10 history pages |
 | EVM | 1 summary + up to 10 pages of transfers + up to 10 pages of token transfers |
+| Avalanche C-Chain | 2 + up to 10 pages of transfers + up to 10 pages of token transfers |
 | Solana | ~2 + up to 25 transaction reads |
 | Cosmos Hub | 3, plus a page per extra 200 validators staked with |
 | Polkadot | 1 |
@@ -211,7 +213,7 @@ of zero while their quantities were tracked correctly.
 So: **a zero next to a token you know is worth something almost always means the
 provider does not list that token, not that the balance is wrong.** Check the
 quantity, which is read straight from the chain. Native coins (BTC, ETH, SOL,
-POL, XDAI) and large-cap tokens are the well-covered case.
+POL, XDAI, AVAX) and large-cap tokens are the well-covered case.
 
 Pricing by contract address instead of by symbol would close most of the gap, and
 the data is already close at hand — the EVM indexer returns an exchange rate per

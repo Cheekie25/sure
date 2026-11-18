@@ -3,6 +3,7 @@ en:
   onchain:
     chains:
       arbitrum: Arbitrum
+      avalanche: Avalanche
       base: Base
       bitcoin: Bitcoin
       cosmos: Cosmos Hub
